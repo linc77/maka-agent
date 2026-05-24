@@ -48,11 +48,21 @@ import type {
   UsageStats,
 } from '@maka/core';
 import type { TestProxyInput } from '@maka/core/settings/network-settings';
-import { HEALTH_SIGNAL_LAYERS, OS_PERMISSION_IDS, isToastPosition } from '@maka/core';
+import {
+  HEALTH_SIGNAL_LAYERS,
+  OS_PERMISSION_IDS,
+  deriveProviderAuthContractFromConnection,
+  isToastPosition,
+} from '@maka/core';
 import { BOT_PROVIDERS, createDefaultSettings } from '@maka/core/settings';
 import { useModalA11y, useToast } from '@maka/ui';
 import { ProvidersPanel } from './ProvidersPanel';
 import { openPathFailureCopy, openPathActionLabel } from '../open-path';
+import {
+  deriveAccountAuthActions,
+  presentAccountAuthState,
+  type AccountAuthActionPresentation,
+} from './account-auth-ui';
 import {
   connectionUiStatusFromRecord,
   presentConnectionUiStatus,
@@ -153,7 +163,15 @@ function navGroupSummary(args: {
       if (!defaultConnection) {
         return { text: '未设默认模型', tone: 'warning' };
       }
-      return { text: `${enabled} 个连接可用` };
+      // PR-UI-AUDIT-1 (@kenji msg 7a16aa0b): "可用" implied runtime
+      // readiness (operational), but this count is purely
+      // `connections.filter(c => c.enabled).length` — an enabled
+      // connection may still be un-validated, needs-reauth, or
+      // erroring. Use "已启用" to describe the actual user-toggle
+      // state without claiming runtime availability. Matches the
+      // provider-auth contract Path 17 S11 D1 lock
+      // (`enabled / validated / operational` are three distinct concepts).
+      return { text: `${enabled} 个已启用连接` };
     }
     case '集成': {
       const proxyOn = args.settings.network?.proxy?.enabled ?? false;
@@ -967,6 +985,9 @@ function AccountConnectionRow(props: {
 }) {
   const status: ConnectionUiStatus = connectionUiStatusFromRecord(props.connection, props.hasSecret);
   const presentation = presentConnectionUiStatus(status);
+  const authContract = deriveProviderAuthContractFromConnection(props.connection, props.hasSecret);
+  const authPresentation = presentAccountAuthState(authContract);
+  const authActions = deriveAccountAuthActions(authContract);
   const subtitle = `${props.connection.providerType} · ${props.connection.defaultModel || '未设默认模型'}`;
   const lastTestAt = props.connection.lastTestAt
     ? new Date(props.connection.lastTestAt).toLocaleString()
@@ -994,24 +1015,67 @@ function AccountConnectionRow(props: {
         </span>
       </div>
       <p className="settingsConnectionDetail">{presentation.detail}</p>
+      <div className="settingsAuthContract" data-state={authContract.state}>
+        <div className="settingsAuthContractText">
+          <strong>{authPresentation.label}</strong>
+          <span>{authPresentation.detail}</span>
+        </div>
+        <span className="settingsAuthContractBadge" data-tone={authPresentation.tone}>
+          {authPresentation.stateLabel}
+        </span>
+      </div>
       {(lastTestAt || lastTestMessage) && (
         <p className="settingsConnectionMeta">
           {lastTestMessage && <span>{lastTestMessage}</span>}
           {lastTestAt && <time dateTime={props.connection.lastTestAt}>{lastTestAt}</time>}
         </p>
       )}
-      <div className="settingsConnectionActions">
-        <button
-          type="button"
-          className="maka-button"
-          data-size="sm"
-          disabled={!props.connection.enabled || !props.canTest}
-          onClick={props.onTest}
-        >
-          {props.testing ? '测试中…' : '测试连接'}
-        </button>
-      </div>
+      {authActions.length > 0 && (
+        <div className="settingsConnectionActions" aria-label={`${props.connection.name} 账号操作`}>
+          {authActions.map((action) => (
+            <AccountAuthActionView
+              key={action.action}
+              action={action}
+              disabled={!props.canTest}
+              testing={action.action === 'test_credentials' && props.testing}
+              onTest={props.onTest}
+            />
+          ))}
+        </div>
+      )}
     </div>
+  );
+}
+
+function AccountAuthActionView(props: {
+  action: AccountAuthActionPresentation;
+  disabled: boolean;
+  testing: boolean;
+  onTest(): void;
+}) {
+  if (props.action.executable && props.action.action === 'test_credentials') {
+    return (
+      <button
+        type="button"
+        className="maka-button"
+        data-size="sm"
+        disabled={props.disabled}
+        onClick={props.onTest}
+        title={props.action.detail}
+      >
+        {props.testing ? '测试中…' : props.action.label}
+      </button>
+    );
+  }
+  return (
+    <span
+      className="settingsAuthActionPill"
+      data-kind={props.action.kind}
+      data-tone={props.action.tone}
+      title={props.action.detail}
+    >
+      {props.action.label}
+    </span>
   );
 }
 

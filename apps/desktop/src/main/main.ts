@@ -12,6 +12,7 @@ import {
   healthSignalFromConnection,
   healthSignalFromConnectionRuntime,
   isPermissionMode,
+  normalizeConnectionBaseUrl,
 } from '@maka/core';
 import type {
   AppSettings,
@@ -39,6 +40,10 @@ import type {
   UsageGroupBy,
   UsageQuery,
 } from '@maka/core/usage-stats/types';
+import {
+  normalizePricingConfig,
+  normalizePricingModelKey,
+} from '@maka/core/usage-stats/pricing';
 import type {
   NetworkSettings as ContractNetworkSettings,
   ProxySettings,
@@ -102,6 +107,7 @@ const visualSmokeFixture = resolveVisualSmokeFixture(
   process.env.MAKA_VISUAL_SMOKE_AUTO_CAPTURE,
   process.env.MAKA_VISUAL_SMOKE_THEME,
   process.env.MAKA_VISUAL_SMOKE_LOCALE,
+  process.env.MAKA_VISUAL_SMOKE_TIMEZONE,
 );
 const workspaceRoot = join(app.getPath('userData'), 'workspaces', visualSmokeFixture?.workspaceName ?? 'default');
 const store = createSessionStore(workspaceRoot);
@@ -753,17 +759,64 @@ function registerIpc(): void {
     emitConnectionListChanged();
   });
   ipcMain.handle('connections:create', async (_event, input: CreateConnectionInput) => {
-    const connection = await connectionStore.create(input);
-    if (input.apiKey) {
-      await credentialStore.setSecret(connection.slug, 'api_key', input.apiKey);
+    // PR-UI-IPC-1 (@kenji msg 35260e29 + 8755ffb3 + 6b638e08):
+    // baseUrl is a credentials-exfiltration boundary. Normalize
+    // BEFORE the store ever sees the input — `javascript:` /
+    // `file:///etc/passwd` / garbage MUST NOT persist, AND raw
+    // whitespace-padded strings MUST NOT slip past as overrides.
+    // Localhost and private-network URLs are intentionally allowed
+    // (Ollama, LM Studio, vLLM). See `normalizeConnectionBaseUrl`
+    // JSDoc.
+    //
+    // Construct a NEW `normalizedInput` rather than mutating
+    // `input` — avoids any chance of later handler logic or
+    // reference aliasing seeing the raw renderer payload.
+    let normalizedInput: CreateConnectionInput = input;
+    if (input.baseUrl !== undefined) {
+      const result = normalizeConnectionBaseUrl(input.baseUrl);
+      if (!result.ok) {
+        throw new Error(result.error);
+      }
+      // For create, a trimmed-to-empty value (`''`) means "no
+      // override; use provider default". The store's existing
+      // ternary (`...(input.baseUrl ? { baseUrl: input.baseUrl } : {})`)
+      // already treats falsy as omit, so passing `''` is safe and
+      // semantically equivalent to omitting. Pass the trimmed
+      // canonical value either way so the store only ever sees
+      // safe text.
+      normalizedInput = { ...input, baseUrl: result.value };
+    }
+    const connection = await connectionStore.create(normalizedInput);
+    if (normalizedInput.apiKey) {
+      await credentialStore.setSecret(connection.slug, 'api_key', normalizedInput.apiKey);
     }
     emitConnectionListChanged();
     return connection;
   });
   ipcMain.handle('connections:update', async (_event, slug: string, patch: UpdateConnectionInput) => {
-    const connection = await connectionStore.update(slug, patch);
-    if (patch.apiKey !== undefined) {
-      if (patch.apiKey) await credentialStore.setSecret(slug, 'api_key', patch.apiKey);
+    // PR-UI-IPC-1 same boundary on update. `patch.baseUrl ===
+    // undefined` means "don't touch" — skip validation entirely and
+    // don't include the key in the normalized patch.
+    //
+    // EXPLICIT CLEAR INTENT: when the user types whitespace into
+    // the baseUrl form field, the renderer sends a string (often
+    // `''` or `'   '`). After normalize, that becomes `''`, which
+    // the store's existing
+    // `patch.baseUrl !== undefined ? patch.baseUrl || undefined : current.baseUrl`
+    // clears as an explicit override removal. Preserve that —
+    // don't convert to `undefined` (which would silently swallow
+    // the clear intent as "don't touch"). @kenji msg 6b638e08.
+    let normalizedPatch: UpdateConnectionInput = patch;
+    if (patch.baseUrl !== undefined) {
+      const result = normalizeConnectionBaseUrl(patch.baseUrl);
+      if (!result.ok) {
+        throw new Error(result.error);
+      }
+      normalizedPatch = { ...patch, baseUrl: result.value };
+    }
+    const connection = await connectionStore.update(slug, normalizedPatch);
+    if (normalizedPatch.apiKey !== undefined) {
+      if (normalizedPatch.apiKey) await credentialStore.setSecret(slug, 'api_key', normalizedPatch.apiKey);
       else await credentialStore.deleteSecret(slug, 'api_key');
     }
     emitConnectionListChanged();
@@ -960,17 +1013,37 @@ function registerIpc(): void {
   ipcMain.handle('usage:pricing:list', () =>
     tryResult(async () => telemetryRepo.listPricingOverrides(), 'USAGE_PRICING_LIST_FAILED'),
   );
-  ipcMain.handle('usage:pricing:put', (_event, pricing: PricingConfig) =>
+  ipcMain.handle('usage:pricing:put', (_event, pricing: unknown) =>
+    // PR-UI-IPC-3 (@kenji msg 9033abdf): normalize at the IPC
+    // store boundary. Telemetry repo only ever sees the canonical
+    // `PricingConfig` shape — required rates are finite >= 0,
+    // optional cache rates are either omitted or finite >= 0,
+    // modelKey is trimmed + non-empty + length-capped, extra
+    // fields stripped. Bad payload throws a typed error to the
+    // renderer; nothing reaches `telemetryRepo.upsertPricing`.
     tryResult(async () => {
-      await telemetryRepo.upsertPricing(pricing);
+      const normalized = normalizePricingConfig(pricing);
+      if (!normalized.ok) {
+        throw new Error(normalized.error);
+      }
+      await telemetryRepo.upsertPricing(normalized.value);
       lookupPricing = buildPricingLookup(telemetryRepo.listPricingOverrides());
       mainWindow?.webContents.send('usage:pricing:changed');
-      return pricing;
+      return normalized.value;
     }, 'USAGE_PRICING_PUT_FAILED'),
   );
-  ipcMain.handle('usage:pricing:reset', (_event, modelKey: string) =>
+  ipcMain.handle('usage:pricing:reset', (_event, modelKey: unknown) =>
+    // PR-UI-IPC-3: same modelKey gate as put. Without this, reset
+    // could crash on a non-string key (e.g. `localeCompare`
+    // operates on the stored keys) or pass an empty string that
+    // matches an orphan entry. Sharing the helper means put + reset
+    // can't drift.
     tryResult(async () => {
-      await telemetryRepo.deletePricing(modelKey);
+      const keyResult = normalizePricingModelKey(modelKey);
+      if (!keyResult.ok) {
+        throw new Error(keyResult.error);
+      }
+      await telemetryRepo.deletePricing(keyResult.value);
       lookupPricing = buildPricingLookup(telemetryRepo.listPricingOverrides());
       mainWindow?.webContents.send('usage:pricing:changed');
     }, 'USAGE_PRICING_RESET_FAILED'),
