@@ -194,6 +194,76 @@ export {
   isHealthSignalStatus,
 } from './health.js';
 
+// search.ts (PR-SEARCH-0)
+export type {
+  SearchError,
+  SearchErrorReason,
+  SearchNormalizeResult,
+  SearchOk,
+  SearchProviderKind,
+  SearchRequest,
+  SearchResult,
+  SearchSourceKind,
+  SearchSourceSnapshot,
+  WebFetchRequest,
+} from './search.js';
+export {
+  SEARCH_DEFAULT_LIMIT,
+  SEARCH_DOMAIN_MAX_CHARS,
+  SEARCH_MAX_LIMIT,
+  SEARCH_QUERY_MAX_CHARS,
+  SEARCH_URL_MAX_CHARS,
+  normalizeSearchDomain,
+  normalizeSearchDomainList,
+  normalizeSearchLimit,
+  normalizeSearchQuery,
+  normalizeSearchUrl,
+  rewriteSearchQueryForFreshness,
+  searchDomainMatches,
+  stripSearchTrackingParams,
+} from './search.js';
+
+// memory.ts (PR-MEMORY-1) — core contract; no IPC/storage/embedding/UI.
+export type {
+  DraftMemoryEntry,
+  DurableMemoryEntry,
+  MemoryBlockReason,
+  MemoryCandidateSource,
+  MemoryCapabilitySnapshot,
+  MemoryEntry,
+  MemoryMode,
+  MemoryPersistenceState,
+  MemoryResult,
+  MemoryScope,
+  MemorySource,
+  MemorySourceResolution,
+  MemoryUsePolicy,
+  MemoryWriteRequest,
+  MemoryWriteRequestContext,
+} from './memory.js';
+export {
+  MEMORY_BLOCK_REASONS,
+  MEMORY_CANDIDATE_SOURCES,
+  MEMORY_CONTENT_MAX_CODE_POINTS,
+  MEMORY_MODES,
+  MEMORY_PERSISTENCE_STATES,
+  MEMORY_SCOPES,
+  MEMORY_SOURCES,
+  MEMORY_USE_POLICIES,
+  isMemoryCandidateSource,
+  isMemoryMode,
+  isMemoryPersistenceState,
+  isMemoryScope,
+  isMemorySource,
+  isMemoryUsePolicy,
+  normalizeMemoryContent,
+  normalizeMemoryMode,
+  normalizeMemoryPersistenceState,
+  normalizeMemoryScope,
+  normalizeMemorySource,
+  validateMemoryWriteRequest,
+} from './memory.js';
+
 // backend-types.ts
 export type { BackendSendInput, PermissionDecision } from './backend-types.js';
 
