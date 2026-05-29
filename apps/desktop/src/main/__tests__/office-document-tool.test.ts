@@ -12,8 +12,32 @@ describe('OfficeDocument read-only tool', () => {
     assert.equal(tool.name, 'OfficeDocument');
     assert.equal(tool.permissionRequired, false);
     assert.match(tool.description, /read-only/);
+    assert.match(tool.description, /Allowed operations are help/);
     assert.match(tool.description, /view outline\/text\/stats\/issues\/annotated/);
     assert.doesNotMatch(tool.description, /\badd\b.*\bset\b.*\bclose\b/);
+  });
+
+  it('supports read-only officecli help without a document path', async () => {
+    await withWorkspace(async (workspaceRoot) => {
+      const calls: Array<{ cmd: string; args: string[] }> = [];
+      const result = await runOfficeDocumentOperation({
+        cwd: workspaceRoot,
+        operation: 'help',
+        topic: 'pptx',
+        runner: fakeRunner((cmd, args, _options, callback) => {
+          calls.push({ cmd, args });
+          callback(null, 'pptx help', '');
+        }),
+      });
+
+      assert.equal(result.ok, true);
+      if (!result.ok) return;
+      assert.equal(result.kind, 'office_document');
+      assert.deepEqual(calls, [{ cmd: 'officecli', args: ['help', 'pptx'] }]);
+      assert.deepEqual(result.args, ['help', 'pptx']);
+      assert.equal(result.path, undefined);
+      assert.equal(result.stdout, 'pptx help');
+    });
   });
 
   it('builds safe officecli args and returns relative paths only', async () => {
@@ -35,6 +59,7 @@ describe('OfficeDocument read-only tool', () => {
 
       assert.equal(result.ok, true);
       if (!result.ok) return;
+      assert.equal(result.kind, 'office_document');
       assert.deepEqual(calls, [{ cmd: 'officecli', args: ['view', expectedPath, 'outline'] }]);
       assert.deepEqual(result.args, ['view', 'deck.pptx', 'outline']);
       assert.equal(result.path, 'deck.pptx');
@@ -89,6 +114,7 @@ describe('OfficeDocument read-only tool', () => {
         runner,
       });
       assert.equal(missingSelector.ok, false);
+      assert.equal(missingSelector.kind, 'office_document');
       assert.equal(missingSelector.ok ? null : missingSelector.reason, 'invalid_selector');
 
       const missingQuery = await runOfficeDocumentOperation({
@@ -98,7 +124,17 @@ describe('OfficeDocument read-only tool', () => {
         runner,
       });
       assert.equal(missingQuery.ok, false);
+      assert.equal(missingQuery.kind, 'office_document');
       assert.equal(missingQuery.ok ? null : missingQuery.reason, 'invalid_query');
+
+      const missingPath = await runOfficeDocumentOperation({
+        cwd: workspaceRoot,
+        operation: 'validate',
+        runner,
+      });
+      assert.equal(missingPath.ok, false);
+      assert.equal(missingPath.kind, 'office_document');
+      assert.equal(missingPath.ok ? null : missingPath.reason, 'invalid_path');
     });
   });
 
@@ -197,6 +233,7 @@ describe('OfficeDocument read-only tool', () => {
       );
 
       assert.equal(result.ok, false);
+      assert.equal(result.kind, 'office_document');
       assert.equal(result.ok ? null : result.reason, 'officecli_missing');
     });
   });
