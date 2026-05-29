@@ -31,6 +31,9 @@ describe('Settings usage dashboard contract', () => {
       /\{usage\.showDetails && \([\s\S]*?<input value=\{usage\.modelFilter\}/,
       'model/status request filters must be hidden until detail records are enabled',
     );
+    assert.match(usagePage![0], /按模型或工具筛选/);
+    assert.match(usagePage![0], /log\.model\.toLowerCase\(\)\.includes\(normalizedModelFilter\)/);
+    assert.match(usagePage![0], /\(log\.toolName \?\? ''\)\.toLowerCase\(\)\.includes\(normalizedModelFilter\)/);
   });
 
   it('shows a distinct empty state when request filters hide all logs', async () => {
@@ -67,5 +70,39 @@ describe('Settings usage dashboard contract', () => {
       /,\s*row\.status\]\)/,
       'Usage request table must not render raw `success` / `error` enums directly',
     );
+  });
+
+  it('labels model and tool rows without rendering raw request kind enums', async () => {
+    const src = await readRepo('apps/desktop/src/renderer/settings/SettingsModal.tsx');
+    const usageTable = src.match(/function UsageTable\([\s\S]*?function usageRequestStatusLabel/);
+
+    assert.ok(usageTable, 'Usage table block must exist');
+    assert.match(usageTable![0], /headers=\{\['时间', '类型', '对象', '会话', 'Token', '费用', '延迟', '状态'\]\}/);
+    assert.match(usageTable![0], /usageRequestKindLabel\(row\.kind\)/);
+    assert.match(usageTable![0], /usageRequestTarget\(row\)/);
+    assert.match(usageTable![0], /usageRequestSessionCell\(row, props\.onOpenSession\)/);
+    assert.match(usageTable![0], /row\.kind === 'model' \? `\$\$\{\(row\.costUsd \?\? 0\)\.toFixed\(2\)\}` : '-'/);
+    assert.match(src, /case 'model': return '模型'/);
+    assert.match(src, /case 'tool': return '工具'/);
+    assert.match(src, /return row\.kind === 'tool' \? row\.toolName \?\? row\.model : row\.model/);
+    assert.match(src, /function usageRequestSessionCell/);
+    assert.match(src, /onClick=\{\(\) => onOpenSession\(row\.sessionId\)\}/);
+    assert.match(src, /打开 \{label\}/);
+    assert.match(src, /function shortUsageSessionId/);
+    assert.doesNotMatch(
+      usageTable![0],
+      /,\s*row\.kind\s*,/,
+      'Usage request table must not render raw `model` / `tool` enums directly',
+    );
+  });
+
+  it('wires usage diagnostics rows back to source sessions through the shell', async () => {
+    const settingsSrc = await readRepo('apps/desktop/src/renderer/settings/SettingsModal.tsx');
+    const mainSrc = await readRepo('apps/desktop/src/renderer/main.tsx');
+
+    assert.match(settingsSrc, /onOpenSession\?\(sessionId: string\): void/);
+    assert.match(settingsSrc, /onOpenSession=\{props\.onOpenSession\}/);
+    assert.match(mainSrc, /onOpenSession=\{\(sessionId\) => \{/);
+    assert.match(mainSrc, /closeSettings\(\);[\s\S]*setActiveId\(sessionId\);/);
   });
 });

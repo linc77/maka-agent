@@ -1855,6 +1855,7 @@ export function SearchModal(props: {
   const showResults = !error && trimmed.length > 0 && !pending && results.length > 0;
   const showEmpty = !error && trimmed.length > 0 && !pending && results.length === 0;
   const activeResultId = showResults && activeResultIndex >= 0 ? `maka-search-modal-result-${activeResultIndex}` : undefined;
+  const resultsTruncated = showResults && results.some((result) => result.truncated === true);
 
   return (
     <div
@@ -1954,36 +1955,67 @@ export function SearchModal(props: {
             </p>
           )}
           {showResults && (
-            <ul id="maka-search-modal-results" className="maka-search-modal-results" role="list">
-              {results.map((result, index) => (
-                <li key={`${result.target?.kind === 'thread' ? result.target.sessionId : index}-${index}`}>
-                  <button
-                    ref={(node) => { resultRefs.current[index] = node; }}
-                    id={`maka-search-modal-result-${index}`}
-                    type="button"
-                    className="maka-search-modal-result"
-                    data-active={activeResultIndex === index ? 'true' : undefined}
-                    onClick={() => selectResult(result)}
-                    onMouseEnter={() => setActiveResultIndex(index)}
-                    disabled={!props.onNavigateToSession || result.target?.kind !== 'thread'}
-                  >
-                    <div className="maka-search-modal-result-title">{result.title}</div>
-                    {result.snippet && (
-                      // Plain text only — IPC already redacts secrets
-                      // and the snippet is bounded by SNIPPET_MAX_CODE_POINTS.
-                      // No markdown rendering, no <img>, no <a href> —
-                      // per kenji SEARCH gate (no path / no URL exposure).
-                      <div className="maka-search-modal-result-snippet">{result.snippet}</div>
-                    )}
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <>
+              <div className="maka-search-modal-result-summary" aria-live="polite">
+                <span>找到 {results.length} 条匹配</span>
+                {resultsTruncated && <span>结果较多，已显示前 {results.length} 条</span>}
+              </div>
+              <ul id="maka-search-modal-results" className="maka-search-modal-results" role="list">
+                {results.map((result, index) => (
+                  <li key={`${result.target?.kind === 'thread' ? result.target.sessionId : index}-${index}`}>
+                    <button
+                      ref={(node) => { resultRefs.current[index] = node; }}
+                      id={`maka-search-modal-result-${index}`}
+                      type="button"
+                      className="maka-search-modal-result"
+                      data-active={activeResultIndex === index ? 'true' : undefined}
+                      onClick={() => selectResult(result)}
+                      onMouseEnter={() => setActiveResultIndex(index)}
+                      disabled={!props.onNavigateToSession || result.target?.kind !== 'thread'}
+                    >
+                      <div className="maka-search-modal-result-title">{result.title}</div>
+                      {result.snippet && (
+                        // Plain text only — IPC already redacts secrets
+                        // and the snippet is bounded by SNIPPET_MAX_CODE_POINTS.
+                        // No markdown rendering, no <img>, no <a href> —
+                        // per kenji SEARCH gate (no path / no URL exposure).
+                        <div className="maka-search-modal-result-snippet">{renderSearchSnippet(result.snippet, trimmed)}</div>
+                      )}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </>
           )}
         </div>
       </div>
     </div>
   );
+}
+
+function renderSearchSnippet(snippet: string, query: string): ReactNode {
+  const needle = query.trim();
+  if (!needle) return snippet;
+  const haystack = snippet.toLocaleLowerCase();
+  const lowerNeedle = needle.toLocaleLowerCase();
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  let matchIndex = haystack.indexOf(lowerNeedle);
+  while (matchIndex !== -1) {
+    if (matchIndex > cursor) {
+      parts.push(snippet.slice(cursor, matchIndex));
+    }
+    const end = matchIndex + needle.length;
+    parts.push(
+      <mark key={`${matchIndex}-${end}`} className="maka-search-modal-snippet-hit">
+        {snippet.slice(matchIndex, end)}
+      </mark>,
+    );
+    cursor = end;
+    matchIndex = haystack.indexOf(lowerNeedle, cursor);
+  }
+  if (cursor < snippet.length) parts.push(snippet.slice(cursor));
+  return parts.length > 0 ? parts : snippet;
 }
 
 /**
